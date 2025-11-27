@@ -5,16 +5,15 @@ PointMap extracts a target gene from multiple genomes, translates the sequences,
 
 ---
 
+
 ## 🚀 Features
-- Extract target genes using BLAST + bedtools
-- Clean FASTA headers for consistency
-- Annotate extracted sequences with Prokka
-- Auto-generate the reference protein from the user-provided reference genome or CDS
-- Extract amino-acid sequences for all isolates
-- Build a combined multi-FASTA protein file
-- Align sequences using MAFFT
-- Detect amino-acid point mutations relative to the reference
-- Fully reproducible using a minimal Conda environment
+- Locate the target gene in both the reference genome and all sample genomes  
+  (Prokka annotation + bedtools extraction + BLAST search)
+- Extract nucleotide sequences and generate amino-acid sequences for all genomes  
+  (Prokka-based translation)
+- Align all protein sequences to the reference using MAFFT
+- Detect amino-acid point mutations relative to the reference sequence
+
 
 ---
 
@@ -28,30 +27,31 @@ cd PointMap
 
 Create the environment:
 ```
-conda env create -f environment.yml
+conda create -n pointmap
 conda activate pointmap
+conda env update -f environment.yml
 ```
 
 ---
 
 ## 📁 Required Inputs
 
-### 1. Directory of genome assemblies  
-Supported formats: `.fasta`, `.fa`, `.fna`
-
-Example (included in repo):
-```
-example_genome/
- └── GCA_000009865.fna
-```
-
-### 2. Reference genome or reference gene FASTA  
+### 1. Reference genome or reference gene FASTA  
 Must contain the **full CDS** of the target gene.
 
 Example (included in repo):
 ```
 example_ref/
  └── haemo_reference.fna
+```
+
+### 2. Directory of genome assemblies  
+Supported formats: `.fasta`, `.fa`, `.fna`
+
+Example (included in repo):
+```
+example_genome/
+ └── GCA_000009865.fna
 ```
 
 ### 3. Gene name  
@@ -66,18 +66,15 @@ A folder that PointMap will create.
 
 General syntax:
 ```
-./pointmap.sh <GENOMES_DIR> <REFERENCE_FNA> <GENE_NAME> <OUTPUT_DIR>
+./pointmap.sh <REFERENCE_GENOME> <GENOMES_DIR> <GENE_NAME> <OUTPUT_DIR>
 ```
 
 Example — Extract and map mutations in *gyrA*:
 ```
-./pointmap.sh example_genome/ example_ref/haemo_reference.fna gyrA gyrA_results
+./pointmap.sh path/to/haemo_reference.fna path/to/genomes/ gyrB test_output
 ```
 
-Example — Another gene, same reference:
-```
-./pointmap.sh example_genome/ example_ref/haemo_reference.fna parC parC_results
-```
+
 
 ---
 
@@ -85,14 +82,13 @@ Example — Another gene, same reference:
 
 ```
 output_dir/
- ├── 01_sequences/       # Extracted DNA sequences of the target gene
- ├── 02_prokka/          # Prokka annotations of extracted sequences
- ├── 03_proteins/        # Protein sequences (samples + reference)
- ├── 04_alignment/
- │     ├── all.faa       # Combined protein sequences
- │     └── aligned.faa   # MAFFT alignment
- └── 05_results/
-       └── <gene>_mutations.txt
+ ├── sequences_ref/         # Extracted reference gene sequence
+ ├── sequences_samples/     # Extracted sample gene sequences
+ ├── prokka_out/            # Prokka annotations
+ ├── protein/               # Translated protein FASTAs
+ ├── multi_sequences.faa    # All proteins concatenated
+ ├── aligned_sequences.faa  # MAFFT alignment
+ └── mutations_<gene>.txt   # Final mutation list
 ```
 
 Example mutation output:
@@ -104,13 +100,4 @@ isolate3   S84A
 
 ---
 
-## ❗ Reference FASTA Requirements
-- Must contain the **full CDS** of the target gene  
-- Partial fragments will break mutation numbering  
-- A full genome is acceptable (PointMap extracts the gene automatically)  
-- The reference is translated and used as the baseline sequence  
 
----
-
-## 📧 Contact
-For issues, bugs, or feature requests, please open an issue on GitHub.
