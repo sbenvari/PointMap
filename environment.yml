@@ -1,11 +1,8 @@
 name: pointmap
 channels:
-  - bioconda
   - conda-forge
+  - bioconda
 dependencies:
-  - python=3.10
-  - biopython
-  - blast
-  - bedtools
-  - mafft
   - prokka
+  - biopython
+  - mafft
