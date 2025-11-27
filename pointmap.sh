@@ -1,173 +1,211 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-###############################################
-# gene_pipeline.sh
-# Extract gene → annotate → extract proteins → add reference → align → call mutations
 # USAGE:
-#   ./gene_pipeline.sh <GENOMES_DIR> <REF_GENE.fasta> <GENE_NAME> <OUTPUT_DIR>
-###############################################
+#   ./pointmap.sh <REFERENCE_GENOME> <GENOMES_DIR> <GENE_NAME> <OUTDIR>
 
 if [[ $# -ne 4 ]]; then
-    echo "Usage: $0 <GENOMES_DIR> <REF_GENE.fasta> <GENE_NAME> <OUTPUT_DIR>"
+    echo "Usage: $0 <REFERENCE_GENOME> <GENOMES_DIR> <GENE_NAME> <OUTDIR>"
     exit 1
 fi
 
-GENOMES_DIR="$1"
-REF_GENE="$2"
-GENE_NAME="$3"
-OUT="$4"
+# Resolve absolute paths
+REF_GENOME=$(realpath "$1")
+SAMPLE_DIR=$(realpath "$2")
+GENE="$3"
+OUT=$(realpath "$4")
 
 mkdir -p "$OUT"
-SEQ="$OUT/01_sequences"
-PROKKA="$OUT/02_prokka"
-PROT="$OUT/03_proteins"
-ALIGN="$OUT/04_alignment"
-RESULTS="$OUT/05_results"
+cd "$OUT"
 
-mkdir -p "$SEQ" "$PROKKA" "$PROT" "$ALIGN" "$RESULTS"
+echo "=== POINTMAP PIPELINE STARTED ==="
 
-shopt -s nullglob
+############################################
+# GLOBAL CLEANUP OF .fai FILES
+############################################
+echo "=== CLEANUP: Removing .fai index files ==="
+find "$SAMPLE_DIR" -maxdepth 1 -name "*.fai" -delete 2>/dev/null || true
+find "$OUT" -maxdepth 4 -name "*.fai" -delete 2>/dev/null || true
 
-###############################################
-# STEP 0: Convert REFERENCE gene to a REF.faa
-###############################################
+############################################
+# STEP 1: Annotate REFERENCE genome
+############################################
+echo "=== STEP 1: Running Prokka on reference genome ==="
+prokka --force --prefix ref --outdir ref_prokka "$REF_GENOME"
 
-echo "=== Step 0: Processing reference gene ==="
+############################################
+# STEP 2: Extract gene coordinates from GFF
+############################################
+echo "=== STEP 2: Locating $GENE in reference annotation ==="
 
-mkdir -p "$OUT/reference_tmp"
+grep -i "Name=${GENE}" ref_prokka/*.gff > ref_${GENE}.gff
 
-prokka \
-  --quiet \
-  --locustag REF \
-  --outdir "$OUT/reference_tmp" \
-  "$REF_GENE"
-
-REF_FAA=$(find "$OUT/reference_tmp" -name "*.faa" | head -n 1)
-
-if [[ ! -f "$REF_FAA" ]]; then
-    echo "ERROR: reference protein .faa not produced by Prokka"
+if [[ ! -s ref_${GENE}.gff ]]; then
+    echo "ERROR: Gene '$GENE' not found in reference annotation."
     exit 1
 fi
 
-# Clean + rename reference protein
-awk -v id="reference" 'NR==1 {print ">"id; next} {print}' "$REF_FAA" \
-    > "$PROT/reference.faa"
+awk '{print $1"\t"$4-1"\t"$5}' ref_${GENE}.gff > ref_${GENE}.bed
 
-echo "Reference protein created: $PROT/reference.faa"
+############################################
+# STEP 3: Extract reference gene FASTA
+############################################
+echo "=== STEP 3: Extracting reference $GENE sequence ==="
 
+mkdir -p sequences_ref
 
-###############################################
-# STEP 1: Extract gene from sample genomes
-###############################################
+bedtools getfasta -fi "$REF_GENOME" -bed ref_${GENE}.bed \
+    -fo sequences_ref/${GENE}_reference.fasta
 
-echo "=== Step 1: Extracting $GENE_NAME from genomes ==="
+sed -i -e '$a\' sequences_ref/${GENE}_reference.fasta
 
-for genome in "$GENOMES_DIR"/*.fa*; do
+############################################
+# STEP 4: Extract gene from sample genomes
+############################################
+echo "=== STEP 4: Extracting $GENE from sample genomes ==="
+
+mkdir -p sequences_samples
+
+for genome in "$SAMPLE_DIR"/*.fa "$SAMPLE_DIR"/*.fna "$SAMPLE_DIR"/*.fasta; do
+    [[ -e "$genome" ]] || continue
+    [[ "$genome" == *.fai ]] && continue
+
+    [[ -e "${genome}.fai" ]] && rm -f "${genome}.fai"
+
     sample=$(basename "$genome")
     sample="${sample%%.*}"
 
-    blastn -query "$REF_GENE" -subject "$genome" -out "${sample}.blast" -outfmt 6
+    blastn -query sequences_ref/${GENE}_reference.fasta \
+           -subject "$genome" -out ${sample}.blast -outfmt 6 || true
 
     if [[ ! -s ${sample}.blast ]]; then
         echo "WARNING: No BLAST hit for $sample"
         continue
     fi
 
-    awk '{ if ($9 < $10) print $2 "\t" $9-1 "\t" $10;
-           else           print $2 "\t" $10-1 "\t" $9 }' \
-        "${sample}.blast" > "${sample}.bed"
+    awk '{if ($9 < $10) print $2"\t"$9-1"\t"$10;
+          else print $2"\t"$10-1"\t"$9}' \
+        ${sample}.blast > ${sample}.bed
 
-    bedtools getfasta -fi "$genome" -bed "${sample}.bed" \
-        -fo "$SEQ/${sample}_${GENE_NAME}.fasta"
+    bedtools getfasta -fi "$genome" -bed ${sample}.bed \
+        -fo sequences_samples/${sample}_${GENE}.fasta
 
-    rm -f "${sample}.blast" "${sample}.bed"
+    rm -f ${sample}.blast ${sample}.bed
+    rm -f "${genome}.fai" 2>/dev/null || true
 done
 
+############################################
+# STEP 5: Rename FASTA headers to EXACT sample names
+############################################
+echo "=== STEP 5: Renaming FASTA headers to sample names ==="
 
-###############################################
-# STEP 2: Clean FASTA headers
-###############################################
+# Reference header
+awk 'BEGIN {print ">reference"} !/^>/ {print}' \
+    sequences_ref/${GENE}_reference.fasta > tmp && \
+mv tmp sequences_ref/${GENE}_reference.fasta
 
-echo "=== Step 2: Cleaning FASTA headers ==="
-
-for f in "$SEQ"/*.fasta; do
-    awk '/^>/ {sub(/_length_.*/, "", $0); print} !/^>/ {print}' "$f" \
-        > tmp && mv tmp "$f"
-done
-
-
-###############################################
-# STEP 3: Prokka annotation of extracted sequences
-###############################################
-
-echo "=== Step 3: Running Prokka ==="
-
-for f in "$SEQ"/*.fasta; do
+# Sample headers
+for f in sequences_samples/*.fasta; do
     sample=$(basename "$f" .fasta)
-    prokka --quiet --outdir "$PROKKA/$sample" "$f"
+
+    awk -v id="$sample" 'BEGIN {print ">" id} !/^>/ {print}' \
+        "$f" > tmp && mv tmp "$f"
 done
 
+############################################
+# STEP 6: Prokka → proteins
+############################################
+echo "=== STEP 6: Running Prokka ==="
 
-###############################################
-# STEP 4: Extract protein sequences
-###############################################
+mkdir -p prokka_out protein
 
-echo "=== Step 4: Extracting proteins ==="
+# Reference
+prokka --quiet --force --prefix reference --outdir prokka_out/reference \
+       sequences_ref/${GENE}_reference.fasta
 
-for d in "$PROKKA"/*/; do
-    sample=$(basename "$d")
-    faa=$(find "$d" -name "*.faa" | head -n 1)
+cp prokka_out/reference/reference.faa protein/reference.faa
 
+# Samples
+for f in sequences_samples/*.fasta; do
+    sample=$(basename "$f" .fasta)
+    outdir="prokka_out/$sample"
+
+    prokka --quiet --force --prefix "$sample" --outdir "$outdir" "$f"
+
+    faa="$outdir/${sample}.faa"
     if [[ -f "$faa" ]]; then
-        awk -v id="$sample" 'NR==1 {print ">" id; next} {print}' "$faa" \
-            > "$PROT/${sample}.faa"
+        cp "$faa" protein/${sample}.faa
+    else
+        echo "WARNING: No protein file for $sample"
     fi
 done
 
+############################################
+# STEP 6.5: Normalize protein FASTA headers
+############################################
+echo "=== STEP 6.5: Renaming protein headers to sample names ==="
 
-###############################################
-# STEP 5: Merge reference + all protein sequences
-###############################################
+for faa in protein/*.faa; do
+    sample=$(basename "$faa" .faa)
 
-echo "=== Step 5: Building multi-protein file ==="
+    awk -v id="$sample" '
+        /^>/ {print ">" id; next}
+        {print}
+    ' "$faa" > tmp && mv tmp "$faa"
+done
 
-cat "$PROT/reference.faa" "$PROT"/*.faa > "$ALIGN/all.faa"
+############################################
+# STEP 7: Concatenate proteins
+############################################
+echo "=== STEP 7: Concatenating FAA files ==="
+cat protein/*.faa > multi_sequences.faa
 
+############################################
+# STEP 8: MAFFT alignment
+############################################
+echo "=== STEP 8: Running MAFFT ==="
+mafft --auto multi_sequences.faa > aligned_sequences.faa
 
-###############################################
-# STEP 6: MAFFT alignment
-###############################################
-
-echo "=== Step 6: Running MAFFT ==="
-mafft --auto "$ALIGN/all.faa" > "$ALIGN/aligned.faa"
-
-
-###############################################
-# STEP 7: Python mutation caller
-###############################################
-
-echo "=== Step 7: Mutation calling ==="
+############################################
+# STEP 9: Mutation calling (direct sample names)
+############################################
+############################################
+# STEP 9: Mutation calling (reference excluded)
+############################################
+echo "=== STEP 9: Calling mutations ==="
 
 python3 - <<EOF
 from Bio import AlignIO
 
-alignment = AlignIO.read("$ALIGN/aligned.faa", "fasta")
+alignment = AlignIO.read("aligned_sequences.faa", "fasta")
 
-ref = alignment[0]
+# Identify the reference record by its header (case-insensitive)
+ref_id_candidates = ["reference", "ref", "REF"]
+ref_index = None
+for i, rec in enumerate(alignment):
+    if rec.id in ref_id_candidates:
+        ref_index = i
+        break
+
+if ref_index is None:
+    raise ValueError("ERROR: Reference sequence not found in alignment.")
+
+ref = alignment[ref_index]
 ref_seq = ref.seq
 
-with open("$RESULTS/${GENE_NAME}_mutations.txt", "w") as out:
-    for record in alignment[1:]:
-        muts = []
-        for i, (r,s) in enumerate(zip(ref_seq, record.seq), start=1):
-            if r != s and r != "-" and s != "-":
-                muts.append(f"{r}{i}{s}")
-        if muts:
-            out.write(f"{record.id}\t{','.join(muts)}\n")
-        else:
-            out.write(f"{record.id}\tNo mutations\n")
-EOF
+with open("mutations_${GENE}.txt", "w") as out:
+    out.write("Sample\tMutations\n")
 
-echo "=== Pipeline completed ==="
-echo "Results stored in $OUT"
+    for i, record in enumerate(alignment):
+        if i == ref_index:
+            continue  # <-- SKIP REFERENCE
+
+        sid = record.id
+        muts = []
+
+        for pos, (r, s) in enumerate(zip(ref_seq, record.seq), start=1):
+            if r != s and r != '-' and s != '-':
+                muts.append(f"{r}{pos}{s}")
+
+        out.write(f"{sid}\t{','.join(muts) if muts else 'No mutations'}\n")
+EOF
