@@ -36,8 +36,8 @@ conda env update -f environment.yml
 
 ## 📁 Required Inputs
 
-### 1. Reference genome or reference gene FASTA  
-Must contain the **full CDS** of the target gene.
+### 1. Reference sample
+Supported formats: `.fasta`, `.fa`, `.fna`
 
 Example (included in repo):
 ```
