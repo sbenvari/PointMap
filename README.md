@@ -109,6 +109,7 @@ The original implementation is provided in `pointmap.sh`.
 ### Nextflow
 A Nextflow implementation is available in [`nextflow/`](nextflow/), providing
 parallel execution, workflow management and improved scalability.
+
 ---
 
 ## 📧 Contact 
