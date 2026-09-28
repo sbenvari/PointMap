@@ -98,6 +98,17 @@ isolate2   No mutations
 isolate3   S84A
 ```
 
+
+## Implementations
+
+PointMap is currently available in two implementations:
+
+### Bash
+The original implementation is provided in `pointmap.sh`.
+
+### Nextflow
+A Nextflow implementation is available in [`nextflow/`](nextflow/), providing
+parallel execution, workflow management and improved scalability.
 ---
 
 ## 📧 Contact 
