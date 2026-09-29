@@ -1,0 +1,12 @@
+name: pointmap-nextflow
+channels:
+  - conda-forge
+  - bioconda
+  - nodefaults
+dependencies:
+  - python=3.12
+  - prokka=1.14.6
+  - blast=2.16.0
+  - bedtools=2.31.1
+  - mafft=7.526
+  - biopython=1.86
