@@ -1,0 +1,42 @@
+name: PointMap tests
+
+on: [push, pull_request, workflow_dispatch]
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v7
+
+      - name: Validate Bash syntax
+        run: bash -n pointmap.sh
+
+      - name: Check missing-arguments error
+        run: |
+          if bash pointmap.sh > usage.txt 2>&1; then
+            echo 'Expected an error when arguments are missing'
+            exit 1
+          fi
+          grep -q '^Usage:' usage.txt
+
+      - name: Install PointMap dependencies
+        uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-file: environment.yml
+          environment-name: pointmap-nextflow
+          cache-environment: true
+          init-shell: bash
+
+      - name: Verify installed tools
+        shell: bash -el {0}
+        run: |
+          set -euo pipefail
+          for tool in prokka blastn bedtools mafft; do
+            command -v "$tool" >/dev/null || { echo "Missing: $tool"; exit 1; }
+          done
+          python -c 'from Bio import AlignIO; print("Biopython available")'
+          echo 'PointMap environment is ready'
